@@ -30,7 +30,7 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Descargar data de CAMS (últimos 3 días)
+      - name: Descargar data de CAMS (últimos 10 días)
         env:
           ADS_API_KEY: ${{ secrets.ADS_API_KEY }}
         run: python scripts/fetch_cams.py
