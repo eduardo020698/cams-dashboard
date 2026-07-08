@@ -104,7 +104,7 @@ let sel = null;             // {i,j,lat,lon}
 let chartKey = null;        // para redibujar el grafico solo cuando cambia punto/contaminante
 
 // ---------- mapa ----------
-const map = L.map("map",{zoomControl:true, worldCopyJump:false, maxBoundsViscosity:1.0}).setView([-10,-77.5],5);
+const map = L.map("map",{zoomControl:true, worldCopyJump:false, maxBoundsViscosity:1.0, zoomSnap:0.1, zoomDelta:0.5}).setView([-10,-77.5],5);
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
   {attribution:"© OpenStreetMap · © CARTO · Datos: Copernicus CAMS", maxZoom:10, minZoom:3}).addTo(map);
 
