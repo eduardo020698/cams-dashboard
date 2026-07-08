@@ -43,6 +43,8 @@
   #status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0f172acc;z-index:1500;font-size:15px}
   #demoBanner{display:none;background:#b45309;color:#fff;text-align:center;font-size:12px;padding:4px}
   .leaflet-container{font:inherit}
+  .valTip{background:#0f172aee;border:1px solid #38bdf8;color:#e2e8f0;font-weight:700;font-size:12px;border-radius:8px;padding:4px 8px;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .valTip::before{border-top-color:#38bdf8}
   @media(max-width:700px){#panel.open{width:100%;position:absolute;right:0;top:0;bottom:0;z-index:1100}}
 </style>
 </head>
@@ -99,9 +101,10 @@ let frames = [];            // [{d:idxDia, h:idxHora, t:Date}]
 let fi = 0;                 // frame actual
 let overlay = null, marker = null, chart = null, playTimer = null;
 let sel = null;             // {i,j,lat,lon}
+let chartKey = null;        // para redibujar el grafico solo cuando cambia punto/contaminante
 
 // ---------- mapa ----------
-const map = L.map("map",{zoomControl:true, worldCopyJump:false}).setView([-9.2,-77.5],5);
+const map = L.map("map",{zoomControl:true, worldCopyJump:false, maxBoundsViscosity:1.0}).setView([-10,-77.5],5);
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
   {attribution:"© OpenStreetMap · © CARTO · Datos: Copernicus CAMS", maxZoom:10, minZoom:3}).addTo(map);
 
@@ -134,12 +137,35 @@ function val(dayIdx, key, hourIdx, i, j){
   const v = day.vars[key][hourIdx][i*day.meta.nlon + j];
   return v < 0 ? null : v;
 }
+function boundsFromMeta(m){
+  const halfLat = Math.abs(m.dlat)/2, halfLon = Math.abs(m.dlon)/2;
+  const latMax = Math.max(m.lat0, m.lat0 + m.dlat*(m.nlat-1));
+  const latMin = Math.min(m.lat0, m.lat0 + m.dlat*(m.nlat-1));
+  return [[latMin-halfLat, m.lon0-halfLon],
+          [latMax+halfLat, m.lon0 + m.dlon*(m.nlon-1) + halfLon]];
+}
+function constrainMap(){
+  // limita el mapa al area con datos: nunca se ven zonas sin cobertura
+  const b = L.latLngBounds(boundsFromMeta(days[0].meta));
+  map.setMaxBounds(b);
+  const mz = map.getBoundsZoom(b, true);
+  map.setMinZoom(mz);
+  map.setView(b.getCenter(), mz);
+  map.on("resize", () => {
+    const z = map.getBoundsZoom(b, true);
+    map.setMinZoom(z);
+    if (map.getZoom() < z) map.setZoom(z);
+  });
+}
 
 // ---------- carga de datos ----------
 async function loadAll(){
   const mf = await (await fetch("data/manifest.json?_=" + Date.now())).json();
   if (mf.demo) document.getElementById("demoBanner").style.display = "block";
+  const st = document.getElementById("status");
+  let n = 0;
   for (const ds of mf.dates){
+    st.textContent = `Cargando datos de CAMS… (${++n}/${mf.dates.length})`;
     const d = await (await fetch(`data/${ds}.json`)).json();
     days.push({date:ds, meta:d, vars:d.vars});
   }
@@ -154,7 +180,7 @@ async function loadAll(){
   document.getElementById("updated").textContent =
     `CAMS Global Forecasts (Copernicus) · concentraciones en superficie · actualizado: ${new Date(mf.updated).toLocaleString("es-PE",{timeZone:TZ})}`;
   document.getElementById("status").style.display = "none";
-  buildChips(); buildLegend(); render();
+  buildChips(); buildLegend(); constrainMap(); render();
 }
 
 // ---------- render de la capa ----------
@@ -179,11 +205,7 @@ function render(){
   const bctx = big.getContext("2d");
   bctx.imageSmoothingEnabled = true; bctx.imageSmoothingQuality = "high";
   bctx.drawImage(cv,0,0,big.width,big.height);
-  const halfLat = Math.abs(m.dlat)/2, halfLon = Math.abs(m.dlon)/2;
-  const latMax = Math.max(m.lat0, m.lat0 + m.dlat*(m.nlat-1));
-  const latMin = Math.min(m.lat0, m.lat0 + m.dlat*(m.nlat-1));
-  const bounds = [[latMin-halfLat, m.lon0-halfLon],
-                  [latMax+halfLat, m.lon0 + m.dlon*(m.nlon-1) + halfLon]];
+  const bounds = boundsFromMeta(m);
   if (overlay) overlay.setUrl(big.toDataURL());
   else overlay = L.imageOverlay(big.toDataURL(), bounds, {opacity:0.72, interactive:false}).addTo(map);
   document.getElementById("tlabel").textContent = fmtTime(fr.t);
@@ -210,16 +232,21 @@ function buildLegend(){
     `<div class="lg" style="background:${COLORS[COLORS.length-1]}">${bp[bp.length-1]}+</div>`;
 }
 
-// ---------- clic en el mapa: panel + tendencia 48 h ----------
+// ---------- clic en el mapa: pausa + valor en el mapa + tendencia 10 dias ----------
 map.on("click", e => {
   const m = days[0].meta;
   const i = Math.round((e.latlng.lat - m.lat0)/m.dlat);
   let lon = e.latlng.lng;
   const j = Math.round((lon - m.lon0)/m.dlon);
   if (i<0 || i>=m.nlat || j<0 || j>=m.nlon) return;
+  // detener la animacion al hacer clic
+  if (playTimer){ clearInterval(playTimer); playTimer = null; document.getElementById("play").textContent = "▶"; }
   sel = {i, j, lat: m.lat0 + i*m.dlat, lon: m.lon0 + j*m.dlon};
   if (marker) marker.setLatLng([sel.lat, sel.lon]);
-  else marker = L.circleMarker([sel.lat, sel.lon],{radius:7,color:"#fff",weight:2,fillColor:"#38bdf8",fillOpacity:.9}).addTo(map);
+  else {
+    marker = L.circleMarker([sel.lat, sel.lon],{radius:7,color:"#fff",weight:2,fillColor:"#38bdf8",fillOpacity:.9}).addTo(map);
+    marker.bindTooltip("", {permanent:true, direction:"top", offset:[0,-8], className:"valTip"});
+  }
   document.getElementById("panel").classList.add("open");
   setTimeout(()=>map.invalidateSize(), 300);
   updatePanel();
@@ -227,7 +254,8 @@ map.on("click", e => {
 document.getElementById("closeP").onclick = () => {
   document.getElementById("panel").classList.remove("open");
   if (marker){ map.removeLayer(marker); marker = null; }
-  sel = null; setTimeout(()=>map.invalidateSize(), 300);
+  sel = null; chartKey = null;
+  setTimeout(()=>map.invalidateSize(), 300);
 };
 
 function updatePanel(){
@@ -243,29 +271,58 @@ function updatePanel(){
              <td>${v==null?"—":v.toFixed(k==="so2"||k==="no2"?2:1)} µg/m³</td></tr>`;
   }
   document.getElementById("ptable").innerHTML = rows;
-  drawChart();
+  // valor de la celda en el mapa, en el instante actual
+  const vNow = val(fr.d, cur, fr.h, sel.i, sel.j);
+  if (marker) marker.setTooltipContent(
+    `<b>${POLL[cur].name}</b>: ${vNow==null?"—":vNow.toFixed(vNow<10?2:1)} µg/m³`);
+  const key = cur + "_" + sel.i + "_" + sel.j;
+  if (!chart || chartKey !== key){ chartKey = key; drawChart(); }
+  else refreshNowMarker();
+}
+
+// linea vertical + punto resaltado en el instante del slider
+const nowLinePlugin = {
+  id: "nowLine",
+  afterDatasetsDraw(c){
+    const x = c.scales.x.getPixelForValue(fi);
+    if (x < c.chartArea.left || x > c.chartArea.right) return;
+    const g = c.ctx;
+    g.save(); g.strokeStyle = "#f43f5e"; g.lineWidth = 1.5; g.setLineDash([5,3]);
+    g.beginPath(); g.moveTo(x, c.chartArea.top); g.lineTo(x, c.chartArea.bottom); g.stroke();
+    g.restore();
+  }
+};
+
+function refreshNowMarker(){
+  chart.data.datasets[0].pointRadius = frames.map((_,k)=>k===fi?5:0);
+  chart.data.datasets[0].pointBackgroundColor = frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8");
+  chart.update("none");
 }
 
 function drawChart(){
-  // últimas 48 h respecto al último frame disponible
-  const tEnd = frames[frames.length-1].t.getTime();
-  const win = frames.filter(f => tEnd - f.t.getTime() <= 48*3600*1000);
-  const labels = win.map(f => f.t.toLocaleString("es-PE",{timeZone:TZ, weekday:"short", hour:"2-digit"}));
-  const data = win.map(f => val(f.d, cur, f.h, sel.i, sel.j));
+  // tendencia de todo el periodo disponible (~10 dias)
+  const labels = frames.map(f => f.t.toLocaleString("es-PE",{timeZone:TZ, day:"2-digit", month:"short", hour:"2-digit"}));
+  const data = frames.map(f => val(f.d, cur, f.h, sel.i, sel.j));
   document.getElementById("chartTitle").textContent =
-    `Tendencia ${POLL[cur].name} · últimas 48 h · µg/m³`;
+    `Tendencia ${POLL[cur].name} · últimos ${days.length} días · µg/m³`;
   if (chart) chart.destroy();
   chart = new Chart(document.getElementById("chart"), {
     type: "line",
+    plugins: [nowLinePlugin],
     data: { labels, datasets: [{
       data, borderColor: "#38bdf8", backgroundColor: "#38bdf833",
-      fill: true, tension: .35, pointRadius: 2.5, pointBackgroundColor: "#38bdf8"
+      fill: true, tension: .3, borderWidth: 1.5,
+      pointRadius: frames.map((_,k)=>k===fi?5:0),
+      pointBackgroundColor: frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8"),
+      pointBorderColor: "#fff", pointBorderWidth: 1
     }]},
     options: {
+      animation: false,
+      interaction: {mode:"index", intersect:false},
       plugins: { legend: {display:false}, tooltip: {callbacks:{
         label: c => ` ${c.parsed.y?.toFixed(2)} µg/m³` }} },
       scales: {
-        x: { ticks: {color:"#94a3b8", maxTicksLimit:8, font:{size:10}}, grid:{color:"#33415544"} },
+        x: { ticks: {color:"#94a3b8", maxTicksLimit:6, maxRotation:0, font:{size:9}}, grid:{color:"#33415544"} },
         y: { ticks: {color:"#94a3b8", font:{size:10}}, grid:{color:"#33415544"}, beginAtZero:true }
       }
     }
