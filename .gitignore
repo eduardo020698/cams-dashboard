@@ -1,0 +1,5 @@
+*.grib
+*.grib2
+*.idx
+__pycache__/
+site/data/*.json
