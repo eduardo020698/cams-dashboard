@@ -1,0 +1,48 @@
+name: Actualizar data CAMS y publicar dashboard
+
+on:
+  schedule:
+    - cron: "30 10 * * *"   # diario 10:30 UTC (05:30 hora Perú), cuando el run 00Z ya está disponible
+  workflow_dispatch: {}      # permite ejecutarlo manualmente
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  update-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Descargar data de CAMS (últimos 3 días)
+        env:
+          ADS_API_KEY: ${{ secrets.ADS_API_KEY }}
+        run: python scripts/fetch_cams.py
+
+      - name: Preparar sitio
+        run: ls -la site/data/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
