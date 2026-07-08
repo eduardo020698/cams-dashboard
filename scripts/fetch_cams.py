@@ -6,7 +6,7 @@ para Peru + Pacifico y genera JSON compacto para el dashboard.
 - Variables superficie: PM2.5, PM10 (kg/m3) + presion superficial
 - Nivel de modelo 137 (~superficie): O3, SO2, NO2 (kg/kg) + temperatura
 - Conversion a ug/m3 usando densidad del aire rho = sp / (R * T)
-- Retencion: solo los ultimos 3 dias disponibles (KEEP_DAYS)
+- Retencion: solo los ultimos 10 dias disponibles (KEEP_DAYS)
 
 Uso:
   ADS_API_KEY=xxxx python scripts/fetch_cams.py
@@ -22,11 +22,11 @@ import tempfile
 import numpy as np
 
 DATASET = "cams-global-atmospheric-composition-forecasts"
-AREA = [2, -92, -20, -66]  # Norte, Oeste, Sur, Este (Peru + Pacifico)
+AREA = [5, -95, -25, -60]  # Norte, Oeste, Sur, Este (Peru + Pacifico, ampliado)
 LEADS = ["0", "3", "6", "9", "12", "15", "18", "21"]  # horas del run 00Z
 HOURS = [int(h) for h in LEADS]
-KEEP_DAYS = 3
-MAX_TRIES = 5  # dias hacia atras a intentar hasta juntar KEEP_DAYS
+KEEP_DAYS = 10
+MAX_TRIES = 13  # dias hacia atras a intentar hasta juntar KEEP_DAYS
 R_AIR = 287.058  # J kg-1 K-1
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
