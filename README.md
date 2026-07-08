@@ -2,7 +2,7 @@
 
 Dashboard interactivo con concentraciones en superficie de **PM2.5, PM10, O₃, SO₂ y NO₂** del
 **CAMS Global Atmospheric Composition Forecasts** (Copernicus), actualizado automáticamente cada día.
-Solo se almacenan los **últimos 3 días** de data.
+Solo se almacenan los **últimos 10 días** de data.
 
 > Nota: se usa el dataset de *forecasts* (casi tiempo real) y no el *reanalysis* (EAC4),
 > porque el reanalysis tiene ~2 años de retraso y no permite actualización diaria.
@@ -10,10 +10,10 @@ Solo se almacenan los **últimos 3 días** de data.
 ## Cómo funciona
 
 1. **GitHub Actions** corre cada día a las 10:30 UTC (05:30 hora Perú).
-2. `scripts/fetch_cams.py` descarga del ADS los últimos 3 días (run 00Z, cada 3 h) para el área
-   2°N–20°S, 92°O–66°O, convierte todo a µg/m³ y genera JSONs compactos.
+2. `scripts/fetch_cams.py` descarga del ADS los últimos 10 días (run 00Z, cada 3 h) para el área
+   5°N–25°S, 95°O–60°O, convierte todo a µg/m³ y genera JSONs compactos.
 3. El sitio (`site/`) se publica en **GitHub Pages**. La data nunca se guarda en el repositorio:
-   cada despliegue contiene exactamente los últimos 3 días. Gratis y sin servidores propios.
+   cada despliegue contiene exactamente los últimos 10 días. Gratis y sin servidores propios.
 
 ## Despliegue paso a paso (no necesitas saber programar)
 
@@ -72,17 +72,18 @@ python scripts/fetch_cams.py
 ## Uso del dashboard
 
 - **Chips superiores**: cambia el contaminante mostrado en el mapa.
-- **Slider inferior / ▶**: navega o anima las últimas 72 h (pasos de 3 h, hora de Perú).
-- **Clic en el mapa**: panel con los valores de los 5 contaminantes en ese punto y el
-  gráfico de **tendencia de las últimas 48 h** del contaminante seleccionado.
+- **Slider inferior / ▶**: navega o anima los últimos 10 días (pasos de 3 h, hora de Perú).
+- **Clic en el mapa**: pausa la animación, muestra el valor de la celda en el mapa, panel con
+  los 5 contaminantes y gráfico de **tendencia de los últimos 10 días** con un marcador
+  del instante seleccionado.
 
 ## Detalles técnicos
 
 | Ítem | Valor |
 |---|---|
 | Dataset | cams-global-atmospheric-composition-forecasts (ADS) |
-| Área | 2°N–20°S, 92°O–66°O (Perú + Pacífico oriental) |
+| Área | 5°N–25°S, 95°O–60°O (Perú + Pacífico oriental) |
 | Resolución | 0.4° × 0.4°, cada 3 h (run 00Z) |
 | Conversión gases | mmr (kg/kg) × ρ, con ρ = P_sup / (R·T) — válido también en los Andes |
 | PM | kg/m³ × 10⁹ → µg/m³ |
-| Retención | 3 días (cada corrida re-descarga y re-publica solo esos días) |
+| Retención | 10 días (cada corrida re-descarga y re-publica solo esos días) |
