@@ -24,7 +24,7 @@ import numpy as np
 DATASET = "cams-global-atmospheric-composition-forecasts"
 AREA = [5, -95, -25, -60]  # Norte, Oeste, Sur, Este (Peru + Pacifico, ampliado)
 LEADS = ["0", "3", "6", "9", "12", "15", "18", "21"]  # horas del run 00Z
-HOURS = [int(h) for h in LEADS]
+FC_LEADS = [str(h) for h in range(24, 121, 3)]  # pronostico: +24h a +120h
 KEEP_DAYS = 10
 MAX_TRIES = 13  # dias hacia atras a intentar hasta juntar KEEP_DAYS
 R_AIR = 287.058  # J kg-1 K-1
@@ -51,12 +51,12 @@ def get_client():
     return cdsapi.Client(quiet=True)  # usa ~/.cdsapirc
 
 
-def retrieve_day(client, date_str, workdir):
+def retrieve_day(client, date_str, workdir, leads=LEADS):
     """Descarga los dos GRIB (superficie y nivel de modelo) para un dia."""
-    sl = os.path.join(workdir, f"sl_{date_str}.grib")
-    ml = os.path.join(workdir, f"ml_{date_str}.grib")
+    sl = os.path.join(workdir, f"sl_{date_str}_{len(leads)}.grib")
+    ml = os.path.join(workdir, f"ml_{date_str}_{len(leads)}.grib")
     common = {"date": f"{date_str}/{date_str}", "time": "00:00",
-              "leadtime_hour": LEADS, "type": "forecast",
+              "leadtime_hour": leads, "type": "forecast",
               "data_format": "grib", "area": AREA}
     client.retrieve(DATASET, dict(common, variable=list(SL_VARS) + ["surface_pressure"]), sl)
     client.retrieve(DATASET, dict(common, variable=list(ML_VARS) + ["temperature"],
@@ -86,6 +86,11 @@ def to_json(sl_path, ml_path, date_str):
 
     ds_sl, ds_ml = steps_sorted(ds_sl), steps_sorted(ds_ml)
 
+    # horas de pronostico reales presentes en el archivo
+    hours = (ds_sl["step"].values / np.timedelta64(1, "h")).astype(int).tolist()
+    if not isinstance(hours, list):
+        hours = [int(hours)]
+
     # densidad del aire (nt, nlat, nlon)
     sp = np.squeeze(ds_sl["sp"].values)
     t = np.squeeze(ds_ml["t"].values)
@@ -102,7 +107,7 @@ def to_json(sl_path, ml_path, date_str):
     payload = {
         "date": date_str,
         "run": "00Z",
-        "hours": HOURS,
+        "hours": hours,
         "lat0": float(lats[0]), "dlat": float(lats[1] - lats[0]), "nlat": len(lats),
         "lon0": float(lons[0]), "dlon": float(lons[1] - lons[0]), "nlon": len(lons),
         "units": "ug/m3",
@@ -154,11 +159,30 @@ def main():
             os.remove(f)
             print(f"[prune] {base}")
 
-    manifest = {"dates": sorted(got),
+    # pronostico: +24h a +120h desde el run mas reciente disponible
+    fc_base = None
+    try:
+        base = max(got)
+        print(f"[fc] pronostico desde run {base} 00Z (+24h a +120h) ...", flush=True)
+        with tempfile.TemporaryDirectory() as wd:
+            sl, ml = retrieve_day(client, base, wd, leads=FC_LEADS)
+            payload = to_json(sl, ml, base)
+            payload["forecast"] = True
+            with open(os.path.join(DATA_DIR, "forecast.json"), "w") as f:
+                json.dump(payload, f, separators=(",", ":"))
+        fc_base = base
+        print(f"[ok] forecast.json (base {base})")
+    except Exception as e:
+        print(f"[warn] pronostico no disponible: {e}", file=sys.stderr)
+        fc_path = os.path.join(DATA_DIR, "forecast.json")
+        if os.path.exists(fc_path):
+            os.remove(fc_path)  # evitar pronostico viejo
+
+    manifest = {"dates": sorted(got), "forecast": fc_base,
                 "updated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     with open(os.path.join(DATA_DIR, "manifest.json"), "w") as f:
         json.dump(manifest, f)
-    print(f"[done] dias: {manifest['dates']}")
+    print(f"[done] dias: {manifest['dates']} + forecast: {fc_base}")
 
 
 if __name__ == "__main__":
