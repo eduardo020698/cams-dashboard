@@ -83,7 +83,7 @@
     <button id="play" title="Animar">▶</button>
     <input type="range" id="slider" min="0" max="0" value="0" step="1">
     <div id="tlabel">—</div>
-    <div id="legendFc"><span class="sw" style="background:#38bdf8"></span>datos asimilados <span class="sw" style="background:#f59e0b"></span>proyección</div>
+    <div id="legendFc"><span class="sw" style="background:#38bdf8"></span><span id="lgObs">pasado</span> <span class="sw" style="background:#f59e0b"></span><span id="lgFc">futuro</span></div>
     <div id="legend"></div>
   </footer>
 </div>
@@ -187,7 +187,7 @@ async function loadAll(){
   // pronostico (+24h a +120h del ultimo run)
   if (mf.forecast){
     try {
-      st.textContent = "Cargando proyección…";
+      st.textContent = "Cargando próximos días…";
       const d = await (await fetch("data/forecast.json?_=" + Date.now())).json();
       fcData = {meta:d, vars:d.vars, hours:d.hours, date:d.date};
       const t0 = Date.parse(`${d.date}T00:00:00Z`);
@@ -198,10 +198,13 @@ async function loadAll(){
   lastObsIdx = frames.map(f=>!f.fc).lastIndexOf(true);
   const sl = document.getElementById("slider");
   sl.max = frames.length-1; sl.value = lastObsIdx; fi = lastObsIdx;
-  // barra de tiempo bicolor: azul observado, ambar pronostico
+  // barra de tiempo bicolor: azul pasado, ambar proximos dias
+  document.getElementById("lgObs").textContent = `últimos ${days.length} días`;
   if (lastObsIdx < frames.length-1){
     const pct = (lastObsIdx + 0.5)/(frames.length-1)*100;
     sl.style.background = `linear-gradient(to right, #38bdf8 0%, #38bdf8 ${pct}%, #f59e0b ${pct}%, #f59e0b 100%)`;
+    const fcDays = Math.round((frames[frames.length-1].t - frames[lastObsIdx].t)/864e5);
+    document.getElementById("lgFc").textContent = `próximos ${fcDays} días`;
   } else {
     sl.style.background = "#38bdf8";
     document.getElementById("legendFc").style.display = "none";
@@ -238,7 +241,7 @@ function render(){
   if (overlay) overlay.setUrl(big.toDataURL());
   else overlay = L.imageOverlay(big.toDataURL(), bounds, {opacity:0.72, interactive:false}).addTo(map);
   document.getElementById("tlabel").innerHTML =
-    fmtTime(fr.t) + (fr.fc ? '<span class="fcTag">PROYECCIÓN</span>' : "");
+    fmtTime(fr.t) + (fr.fc ? '<span class="fcTag">FUTURO</span>' : "");
   if (sel) updatePanel();
 }
 
@@ -292,7 +295,7 @@ function updatePanel(){
   const fr = frames[fi];
   document.getElementById("pcoords").innerHTML =
     `${Math.abs(sel.lat).toFixed(1)}°${sel.lat<0?"S":"N"}, ${Math.abs(sel.lon).toFixed(1)}°${sel.lon<0?"O":"E"} · ${fmtTime(fr.t)}` +
-    (fr.fc ? '<span class="fcTag">PROYECCIÓN</span>' : "");
+    (fr.fc ? '<span class="fcTag">FUTURO</span>' : "");
   // tabla de valores actuales
   let rows = "";
   for (const k in POLL){
@@ -305,7 +308,7 @@ function updatePanel(){
   // valor de la celda en el mapa, en el instante actual
   const vNow = fval(fr, cur, sel.i, sel.j);
   if (marker) marker.setTooltipContent(
-    `<b>${POLL[cur].name}</b>: ${vNow==null?"—":vNow.toFixed(vNow<10?2:1)} µg/m³${fr.fc?" (proyección)":""}`);
+    `<b>${POLL[cur].name}</b>: ${vNow==null?"—":vNow.toFixed(vNow<10?2:1)} µg/m³${fr.fc?" (futuro)":""}`);
   const key = cur + "_" + sel.i + "_" + sel.j;
   if (!chart || chartKey !== key){ chartKey = key; drawChart(); }
   else refreshNowMarker();
@@ -339,8 +342,9 @@ function drawChart(){
   // el pronostico incluye el ultimo punto observado para que la linea sea continua
   const fc  = frames.map((f,k) => (f.fc || k===lastObsIdx) ? fval(f, cur, sel.i, sel.j) : null);
   const hasFc = frames.some(f=>f.fc);
+  const fcDays = hasFc ? Math.round((frames[frames.length-1].t - frames[lastObsIdx].t)/864e5) : 0;
   document.getElementById("chartTitle").textContent =
-    `Tendencia ${POLL[cur].name} · ${days.length} días${hasFc?" + proyección (punteada)":""} · µg/m³`;
+    `${POLL[cur].name} · últimos ${days.length} días${hasFc?` + próximos ${fcDays} días (punteado)`:""} · µg/m³`;
   if (chart) chart.destroy();
   const ptR = frames.map((_,k)=>k===fi?5:0);
   const ptC = frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8");
@@ -361,7 +365,7 @@ function drawChart(){
       animation: false,
       interaction: {mode:"index", intersect:false},
       plugins: { legend: {display:false}, tooltip: {callbacks:{
-        label: c => ` ${c.parsed.y==null?"":c.parsed.y.toFixed(2)+" µg/m³"+(c.datasetIndex===1?" (proyección)":"")}`,
+        label: c => ` ${c.parsed.y==null?"":c.parsed.y.toFixed(2)+" µg/m³"+(c.datasetIndex===1?" (futuro)":"")}`,
         filter: c => c.parsed.y != null }} },
       scales: {
         x: { ticks: {color:"#94a3b8", maxTicksLimit:7, maxRotation:0, font:{size:9}}, grid:{color:"#33415544"} },
