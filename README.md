@@ -1,17 +1,17 @@
 # Dashboard de Calidad del Aire · Perú y Pacífico Oriental (CAMS)
 
 Dashboard interactivo con concentraciones en superficie de **PM2.5, PM10, O₃, SO₂ y NO₂** del
-**CAMS Global Atmospheric Composition Forecasts** (Copernicus), actualizado automáticamente cada día.
-Solo se almacenan los **últimos 10 días** de data.
+**CAMS Global Atmospheric Composition Forecasts** (Copernicus), actualizado automáticamente **cada 3 horas**.
+Incluye los **últimos 10 días** observados + **pronóstico a 5 días (+120 h)**.
 
 > Nota: se usa el dataset de *forecasts* (casi tiempo real) y no el *reanalysis* (EAC4),
 > porque el reanalysis tiene ~2 años de retraso y no permite actualización diaria.
 
 ## Cómo funciona
 
-1. **GitHub Actions** corre cada día a las 10:30 UTC (05:30 hora Perú).
-2. `scripts/fetch_cams.py` descarga del ADS los últimos 10 días (run 00Z, cada 3 h) para el área
-   5°N–25°S, 95°O–60°O, convierte todo a µg/m³ y genera JSONs compactos.
+1. **GitHub Actions** corre cada 3 horas (00:20, 03:20, 06:20… UTC).
+2. `scripts/fetch_cams.py` descarga del ADS los últimos 10 días + pronóstico +24h a +120h
+   (run 00Z, cada 3 h) para el área 5°N–25°S, 95°O–60°O, convierte todo a µg/m³ y genera JSONs compactos.
 3. El sitio (`site/`) se publica en **GitHub Pages**. La data nunca se guarda en el repositorio:
    cada despliegue contiene exactamente los últimos 10 días. Gratis y sin servidores propios.
 
@@ -72,10 +72,11 @@ python scripts/fetch_cams.py
 ## Uso del dashboard
 
 - **Chips superiores**: cambia el contaminante mostrado en el mapa.
-- **Slider inferior / ▶**: navega o anima los últimos 10 días (pasos de 3 h, hora de Perú).
+- **Slider inferior / ▶**: navega o anima 10 días observados + 5 días de pronóstico
+  (pasos de 3 h, hora de Perú). Tramo azul = observado, tramo ámbar = pronóstico.
 - **Clic en el mapa**: pausa la animación, muestra el valor de la celda en el mapa, panel con
-  los 5 contaminantes y gráfico de **tendencia de los últimos 10 días** con un marcador
-  del instante seleccionado.
+  los 5 contaminantes y gráfico de **tendencia** (observado sólido + pronóstico punteado)
+  con un marcador del instante seleccionado.
 
 ## Detalles técnicos
 
