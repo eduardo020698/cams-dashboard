@@ -36,8 +36,13 @@
   #chartTitle{font-size:12px;color:var(--mut);margin-bottom:6px}
   footer{background:var(--panel);padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;z-index:1200}
   #play{width:34px;height:34px;border-radius:50%;border:none;background:var(--acc);color:#082f49;font-size:14px;cursor:pointer}
-  #slider{flex:1;min-width:160px;accent-color:var(--acc)}
-  #tlabel{font-size:13px;font-weight:600;min-width:210px}
+  #slider{flex:1;min-width:160px;-webkit-appearance:none;appearance:none;height:7px;border-radius:4px;background:#334155;outline:none;cursor:pointer}
+  #slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:17px;height:17px;border-radius:50%;background:#fff;border:3px solid var(--acc);cursor:pointer;margin-top:0}
+  #slider::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid var(--acc);cursor:pointer}
+  #tlabel{font-size:13px;font-weight:600;min-width:230px}
+  .fcTag{background:#f59e0b;color:#451a03;font-size:10px;font-weight:800;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:1px}
+  #legendFc{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--mut)}
+  #legendFc .sw{width:18px;height:5px;border-radius:2px}
   #legend{display:flex;align-items:center;gap:2px;font-size:10px;color:var(--mut)}
   #legend .lg{width:34px;height:12px;text-align:center;color:#fff;font-size:9px;line-height:12px;text-shadow:0 0 3px #000}
   #status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0f172acc;z-index:1500;font-size:15px}
@@ -78,6 +83,7 @@
     <button id="play" title="Animar">▶</button>
     <input type="range" id="slider" min="0" max="0" value="0" step="1">
     <div id="tlabel">—</div>
+    <div id="legendFc"><span class="sw" style="background:#38bdf8"></span>observado <span class="sw" style="background:#f59e0b"></span>pronóstico</div>
     <div id="legend"></div>
   </footer>
 </div>
@@ -97,8 +103,10 @@ const TZ = "America/Lima";
 
 let cur = "pm25";           // contaminante activo
 let days = [];              // [{date, meta, vars}]
-let frames = [];            // [{d:idxDia, h:idxHora, t:Date}]
+let fcData = null;          // {meta, vars, hours, date} pronostico +24..+120h
+let frames = [];            // [{d,h,t,fc:false} observado | {k,t,fc:true} pronostico]
 let fi = 0;                 // frame actual
+let lastObsIdx = 0;         // ultimo frame observado
 let overlay = null, marker = null, chart = null, playTimer = null;
 let sel = null;             // {i,j,lat,lon}
 let chartKey = null;        // para redibujar el grafico solo cuando cambia punto/contaminante
@@ -132,10 +140,12 @@ function fmtTime(d){
   return d.toLocaleString("es-PE",{timeZone:TZ, weekday:"short", day:"2-digit", month:"short",
     hour:"2-digit", minute:"2-digit"}) + " (hora Perú)";
 }
-function val(dayIdx, key, hourIdx, i, j){
-  const day = days[dayIdx];
-  const v = day.vars[key][hourIdx][i*day.meta.nlon + j];
-  return v < 0 ? null : v;
+function arrOf(f, key){  // arreglo de la grilla para un frame (observado o pronostico)
+  return f.fc ? fcData.vars[key][f.k] : days[f.d].vars[key][f.h];
+}
+function fval(f, key, i, j){
+  const v = arrOf(f, key)[i*days[0].meta.nlon + j];
+  return v < 0 || v == null ? null : v;
 }
 function boundsFromMeta(m){
   const halfLat = Math.abs(m.dlat)/2, halfLon = Math.abs(m.dlon)/2;
@@ -171,12 +181,31 @@ async function loadAll(){
   }
   days.forEach((day, di) => {
     day.meta.hours.forEach((h, hi) => {
-      frames.push({d:di, h:hi, t:new Date(`${day.date}T${String(h).padStart(2,"0")}:00:00Z`)});
+      frames.push({d:di, h:hi, fc:false, t:new Date(`${day.date}T${String(h).padStart(2,"0")}:00:00Z`)});
     });
   });
+  // pronostico (+24h a +120h del ultimo run)
+  if (mf.forecast){
+    try {
+      st.textContent = "Cargando pronóstico…";
+      const d = await (await fetch("data/forecast.json?_=" + Date.now())).json();
+      fcData = {meta:d, vars:d.vars, hours:d.hours, date:d.date};
+      const t0 = Date.parse(`${d.date}T00:00:00Z`);
+      d.hours.forEach((h, k) => frames.push({k, fc:true, t:new Date(t0 + h*3600e3)}));
+    } catch(e){ console.warn("sin pronóstico:", e); }
+  }
   frames.sort((a,b)=>a.t-b.t);
+  lastObsIdx = frames.map(f=>!f.fc).lastIndexOf(true);
   const sl = document.getElementById("slider");
-  sl.max = frames.length-1; sl.value = frames.length-1; fi = frames.length-1;
+  sl.max = frames.length-1; sl.value = lastObsIdx; fi = lastObsIdx;
+  // barra de tiempo bicolor: azul observado, ambar pronostico
+  if (lastObsIdx < frames.length-1){
+    const pct = (lastObsIdx + 0.5)/(frames.length-1)*100;
+    sl.style.background = `linear-gradient(to right, #38bdf8 0%, #38bdf8 ${pct}%, #f59e0b ${pct}%, #f59e0b 100%)`;
+  } else {
+    sl.style.background = "#38bdf8";
+    document.getElementById("legendFc").style.display = "none";
+  }
   document.getElementById("updated").textContent =
     `CAMS Global Forecasts (Copernicus) · concentraciones en superficie · actualizado: ${new Date(mf.updated).toLocaleString("es-PE",{timeZone:TZ})}`;
   document.getElementById("status").style.display = "none";
@@ -185,12 +214,12 @@ async function loadAll(){
 
 // ---------- render de la capa ----------
 function render(){
-  const fr = frames[fi], day = days[fr.d], m = day.meta;
+  const fr = frames[fi], m = days[0].meta;
   const cv = document.createElement("canvas");
   cv.width = m.nlon; cv.height = m.nlat;
   const ctx = cv.getContext("2d");
   const img = ctx.createImageData(m.nlon, m.nlat);
-  const arr = day.vars[cur][fr.h];
+  const arr = arrOf(fr, cur);
   for (let i = 0; i < m.nlat; i++){
     for (let j = 0; j < m.nlon; j++){
       const [r,g,b,a] = rgba(arr[i*m.nlon+j], cur);
@@ -208,7 +237,8 @@ function render(){
   const bounds = boundsFromMeta(m);
   if (overlay) overlay.setUrl(big.toDataURL());
   else overlay = L.imageOverlay(big.toDataURL(), bounds, {opacity:0.72, interactive:false}).addTo(map);
-  document.getElementById("tlabel").textContent = fmtTime(fr.t);
+  document.getElementById("tlabel").innerHTML =
+    fmtTime(fr.t) + (fr.fc ? '<span class="fcTag">PRONÓSTICO</span>' : "");
   if (sel) updatePanel();
 }
 
@@ -260,21 +290,22 @@ document.getElementById("closeP").onclick = () => {
 
 function updatePanel(){
   const fr = frames[fi];
-  document.getElementById("pcoords").textContent =
-    `${Math.abs(sel.lat).toFixed(1)}°${sel.lat<0?"S":"N"}, ${Math.abs(sel.lon).toFixed(1)}°${sel.lon<0?"O":"E"} · ${fmtTime(fr.t)}`;
+  document.getElementById("pcoords").innerHTML =
+    `${Math.abs(sel.lat).toFixed(1)}°${sel.lat<0?"S":"N"}, ${Math.abs(sel.lon).toFixed(1)}°${sel.lon<0?"O":"E"} · ${fmtTime(fr.t)}` +
+    (fr.fc ? '<span class="fcTag">PRONÓSTICO</span>' : "");
   // tabla de valores actuales
   let rows = "";
   for (const k in POLL){
-    const v = val(fr.d, k, fr.h, sel.i, sel.j);
+    const v = fval(fr, k, sel.i, sel.j);
     const c = v==null ? "#475569" : `rgb(${rgba(Math.max(v,0.01),k).slice(0,3).join(",")})`;
     rows += `<tr><td><span class="dot" style="background:${c}"></span>${POLL[k].name}</td>
              <td>${v==null?"—":v.toFixed(k==="so2"||k==="no2"?2:1)} µg/m³</td></tr>`;
   }
   document.getElementById("ptable").innerHTML = rows;
   // valor de la celda en el mapa, en el instante actual
-  const vNow = val(fr.d, cur, fr.h, sel.i, sel.j);
+  const vNow = fval(fr, cur, sel.i, sel.j);
   if (marker) marker.setTooltipContent(
-    `<b>${POLL[cur].name}</b>: ${vNow==null?"—":vNow.toFixed(vNow<10?2:1)} µg/m³`);
+    `<b>${POLL[cur].name}</b>: ${vNow==null?"—":vNow.toFixed(vNow<10?2:1)} µg/m³${fr.fc?" (pronóstico)":""}`);
   const key = cur + "_" + sel.i + "_" + sel.j;
   if (!chart || chartKey !== key){ chartKey = key; drawChart(); }
   else refreshNowMarker();
@@ -294,35 +325,46 @@ const nowLinePlugin = {
 };
 
 function refreshNowMarker(){
-  chart.data.datasets[0].pointRadius = frames.map((_,k)=>k===fi?5:0);
-  chart.data.datasets[0].pointBackgroundColor = frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8");
+  for (const ds of chart.data.datasets){
+    ds.pointRadius = frames.map((_,k)=>k===fi?5:0);
+    ds.pointBackgroundColor = frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8");
+  }
   chart.update("none");
 }
 
 function drawChart(){
-  // tendencia de todo el periodo disponible (~10 dias)
+  // tendencia: observado (solido) + pronostico (punteado)
   const labels = frames.map(f => f.t.toLocaleString("es-PE",{timeZone:TZ, day:"2-digit", month:"short", hour:"2-digit"}));
-  const data = frames.map(f => val(f.d, cur, f.h, sel.i, sel.j));
+  const obs = frames.map(f => f.fc ? null : fval(f, cur, sel.i, sel.j));
+  // el pronostico incluye el ultimo punto observado para que la linea sea continua
+  const fc  = frames.map((f,k) => (f.fc || k===lastObsIdx) ? fval(f, cur, sel.i, sel.j) : null);
+  const hasFc = frames.some(f=>f.fc);
   document.getElementById("chartTitle").textContent =
-    `Tendencia ${POLL[cur].name} · últimos ${days.length} días · µg/m³`;
+    `Tendencia ${POLL[cur].name} · ${days.length} días${hasFc?" + pronóstico (punteado)":""} · µg/m³`;
   if (chart) chart.destroy();
+  const ptR = frames.map((_,k)=>k===fi?5:0);
+  const ptC = frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8");
   chart = new Chart(document.getElementById("chart"), {
     type: "line",
     plugins: [nowLinePlugin],
-    data: { labels, datasets: [{
-      data, borderColor: "#38bdf8", backgroundColor: "#38bdf833",
-      fill: true, tension: .3, borderWidth: 1.5,
-      pointRadius: frames.map((_,k)=>k===fi?5:0),
-      pointBackgroundColor: frames.map((_,k)=>k===fi?"#f43f5e":"#38bdf8"),
-      pointBorderColor: "#fff", pointBorderWidth: 1
-    }]},
+    data: { labels, datasets: [
+      { data: obs, borderColor: "#38bdf8", backgroundColor: "#38bdf833",
+        fill: true, tension: .3, borderWidth: 1.5,
+        pointRadius: ptR, pointBackgroundColor: ptC,
+        pointBorderColor: "#fff", pointBorderWidth: 1 },
+      { data: fc, borderColor: "#f59e0b", backgroundColor: "#f59e0b22",
+        borderDash: [6,4], fill: true, tension: .3, borderWidth: 1.5,
+        pointRadius: ptR, pointBackgroundColor: ptC,
+        pointBorderColor: "#fff", pointBorderWidth: 1 }
+    ]},
     options: {
       animation: false,
       interaction: {mode:"index", intersect:false},
       plugins: { legend: {display:false}, tooltip: {callbacks:{
-        label: c => ` ${c.parsed.y?.toFixed(2)} µg/m³` }} },
+        label: c => ` ${c.parsed.y==null?"":c.parsed.y.toFixed(2)+" µg/m³"+(c.datasetIndex===1?" (pronóstico)":"")}`,
+        filter: c => c.parsed.y != null }} },
       scales: {
-        x: { ticks: {color:"#94a3b8", maxTicksLimit:6, maxRotation:0, font:{size:9}}, grid:{color:"#33415544"} },
+        x: { ticks: {color:"#94a3b8", maxTicksLimit:7, maxRotation:0, font:{size:9}}, grid:{color:"#33415544"} },
         y: { ticks: {color:"#94a3b8", font:{size:10}}, grid:{color:"#33415544"}, beginAtZero:true }
       }
     }
