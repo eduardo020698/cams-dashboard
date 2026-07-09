@@ -2,7 +2,8 @@
 
 Dashboard interactivo con concentraciones en superficie de **PM2.5, PM10, O₃, SO₂ y NO₂** del
 **CAMS Global Atmospheric Composition Forecasts** (Copernicus), actualizado automáticamente **cada 3 horas**.
-Incluye los **últimos 10 días** observados + **pronóstico a 5 días (+120 h)**.
+Incluye los **últimos 10 días** + **próximos ~4 días** (leadtimes +24 a +120 h del último run;
+las primeras 24 h del run se usan para completar el día presente).
 
 > Nota: se usa el dataset de *forecasts* (casi tiempo real) y no el *reanalysis* (EAC4),
 > porque el reanalysis tiene ~2 años de retraso y no permite actualización diaria.
