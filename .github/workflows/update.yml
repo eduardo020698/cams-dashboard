@@ -2,7 +2,7 @@ name: Actualizar data CAMS y publicar dashboard
 
 on:
   schedule:
-    - cron: "30 10 * * *"   # diario 10:30 UTC (05:30 hora Perú), cuando el run 00Z ya está disponible
+    - cron: "20 */3 * * *"   # cada 3 horas (00:20, 03:20, 06:20... UTC)
   workflow_dispatch: {}      # permite ejecutarlo manualmente
 
 permissions:
