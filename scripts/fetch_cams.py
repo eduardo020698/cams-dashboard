@@ -58,7 +58,7 @@ def retrieve_day(client, date_str, workdir, leads=LEADS):
     common = {"date": f"{date_str}/{date_str}", "time": "00:00",
               "leadtime_hour": leads, "type": "forecast",
               "data_format": "grib", "area": AREA}
-    client.retrieve(DATASET, dict(common, variable=list(SL_VARS) + ["surface_pressure"]), sl)
+    client.retrieve(DATASET, dict(common, variable=list(SL_VARS) + ["surface_pressure", "2m_temperature"]), sl)
     client.retrieve(DATASET, dict(common, variable=list(ML_VARS) + ["temperature"],
                                   model_level="137"), ml)
     return sl, ml
@@ -103,6 +103,8 @@ def to_json(sl_path, ml_path, date_str):
     for gname, (short, dec) in ML_VARS.items():
         v = np.squeeze(ds_ml[short].values) * rho * 1e9  # kg/kg -> ug/m3
         out_vars[OUT_KEYS[short]] = (v, dec)
+    # temperatura del aire a 2 m (K -> grados C)
+    out_vars["t2m"] = (np.squeeze(ds_sl["t2m"].values) - 273.15, 1)
 
     payload = {
         "date": date_str,
@@ -114,7 +116,7 @@ def to_json(sl_path, ml_path, date_str):
         "vars": {},
     }
     for key, (arr, dec) in out_vars.items():
-        arr = np.nan_to_num(arr, nan=-1.0)
+        arr = np.nan_to_num(arr, nan=-9999.0)  # centinela de dato faltante
         if arr.ndim == 2:  # un solo paso de tiempo
             arr = arr[None, :, :]
         payload["vars"][key] = [
