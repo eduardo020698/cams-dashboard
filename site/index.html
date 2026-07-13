@@ -143,8 +143,9 @@ function fmtTime(d){
   return d.toLocaleString("es-PE",{timeZone:TZ, weekday:"short", day:"2-digit", month:"short",
     hour:"2-digit", minute:"2-digit"}) + " (hora Perú)";
 }
-function arrOf(f, key){  // arreglo de la grilla para un frame (observado o pronostico)
-  return f.fc ? fcData.vars[key][f.k] : days[f.d].vars[key][f.h];
+function arrOf(f, key){  // arreglo de la grilla para un frame (pasado o futuro)
+  const v = f.fc ? fcData.vars[key] : days[f.d].vars[key];
+  return v ? v[f.fc ? f.k : f.h] : null;
 }
 function fval(f, key, i, j){
   const a = arrOf(f, key);
@@ -179,9 +180,10 @@ async function loadAll(){
   if (mf.demo) document.getElementById("demoBanner").style.display = "block";
   const st = document.getElementById("status");
   let n = 0;
+  const ver = encodeURIComponent(mf.updated || "");
   for (const ds of mf.dates){
     st.textContent = `Cargando datos de CAMS… (${++n}/${mf.dates.length})`;
-    const d = await (await fetch(`data/${ds}.json`)).json();
+    const d = await (await fetch(`data/${ds}.json?u=${ver}`)).json();
     days.push({date:ds, meta:d, vars:d.vars});
   }
   days.forEach((day, di) => {
@@ -193,7 +195,7 @@ async function loadAll(){
   if (mf.forecast){
     try {
       st.textContent = "Cargando próximos días…";
-      const d = await (await fetch("data/forecast.json?_=" + Date.now())).json();
+      const d = await (await fetch(`data/forecast.json?u=${ver}`)).json();
       fcData = {meta:d, vars:d.vars, hours:d.hours, date:d.date};
       const t0 = Date.parse(`${d.date}T00:00:00Z`);
       d.hours.forEach((h, k) => frames.push({k, fc:true, t:new Date(t0 + h*3600e3)}));
@@ -227,7 +229,7 @@ function render(){
   cv.width = m.nlon; cv.height = m.nlat;
   const ctx = cv.getContext("2d");
   const img = ctx.createImageData(m.nlon, m.nlat);
-  const arr = arrOf(fr, cur);
+  const arr = arrOf(fr, cur) || [];
   for (let i = 0; i < m.nlat; i++){
     for (let j = 0; j < m.nlon; j++){
       const [r,g,b,a] = rgba(arr[i*m.nlon+j], cur);
