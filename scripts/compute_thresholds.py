@@ -37,8 +37,8 @@ def get_client():
                          key=key, quiet=True)
 
 
-CHUNKS = [YEARS[i:i + 2] for i in range(0, len(YEARS), 2)]  # 10 bloques de 2 anios
-# (bloques de 5 anios exceden el limite de costo del CDS para este dataset)
+CHUNKS = [[y] for y in YEARS]  # 1 anio por peticion: limite de costo del CDS
+# (bloques de 2+ anios exceden el limite; la velocidad viene del paralelismo)
 
 
 def _chunk_path(workdir, stat, years):
@@ -69,11 +69,16 @@ def request_chunk(stat, years, workdir):
 
 
 def fetch_all(workdir):
-    """Envia las 8 peticiones EN PARALELO: la cola del CDS las procesa a la vez."""
+    """Envia TODAS las peticiones EN PARALELO: la cola del CDS las procesa a la vez."""
     from concurrent.futures import ThreadPoolExecutor
     jobs = [(s, ch) for s in ("maximum", "minimum") for ch in CHUNKS]
-    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
-        futs = [ex.submit(request_chunk, s, ch, workdir) for s, ch in jobs]
+    pend = [j for j in jobs if not os.path.exists(_chunk_path(workdir, *j))]
+    print(f"[era5] {len(jobs) - len(pend)} bloques ya en cache, "
+          f"{len(pend)} por descargar", flush=True)
+    if not pend:
+        return
+    with ThreadPoolExecutor(max_workers=len(pend)) as ex:
+        futs = [ex.submit(request_chunk, s, ch, workdir) for s, ch in pend]
         for fut in futs:
             fut.result()  # propaga cualquier error
 
@@ -122,16 +127,18 @@ def to_cams_grid(field366, lats, lons):
 
 
 def main():
-    with tempfile.TemporaryDirectory() as wd:
-        fetch_all(wd)  # 8 peticiones en paralelo (4 bloques x 2 estadisticas)
-        print("== Tmax diaria (umbral p90, olas de calor) ==")
-        tmax, dates, lats, lons = load_stat("maximum", wd)
-        p90 = to_cams_grid(percentile_climatology(tmax, dates, 90), lats, lons)
-        del tmax
-        print("== Tmin diaria (umbral p10, friajes) ==")
-        tmin, dates, lats, lons = load_stat("minimum", wd)
-        p10 = to_cams_grid(percentile_climatology(tmin, dates, 10), lats, lons)
-        del tmin
+    # directorio persistente (cacheado entre ejecuciones del workflow)
+    wd = os.environ.get("ERA5_CACHE_DIR", "era5_cache")
+    os.makedirs(wd, exist_ok=True)
+    fetch_all(wd)  # 40 peticiones de 1 anio, todas en paralelo
+    print("== Tmax diaria (umbral p90, olas de calor) ==")
+    tmax, dates, lats, lons = load_stat("maximum", wd)
+    p90 = to_cams_grid(percentile_climatology(tmax, dates, 90), lats, lons)
+    del tmax
+    print("== Tmin diaria (umbral p10, friajes) ==")
+    tmin, dates, lats, lons = load_stat("minimum", wd)
+    p10 = to_cams_grid(percentile_climatology(tmin, dates, 10), lats, lons)
+    del tmin
     np.savez_compressed(OUT, p90=p90, p10=p10,
                         lats=CAMS_LATS.astype(np.float32),
                         lons=CAMS_LONS.astype(np.float32),
