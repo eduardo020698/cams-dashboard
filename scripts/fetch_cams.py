@@ -125,29 +125,103 @@ def to_json(sl_path, ml_path, date_str):
     return payload
 
 
+def _doy_index(d):
+    """Indice 0-364 (calendario sin bisiestos) o 365 para el 29-feb."""
+    if d.month == 2 and d.day == 29:
+        return 365
+    return (dt.date(2001, d.month, d.day) - dt.date(2001, 1, 1)).days
+
+
+def _day_t2m_stats(arr):
+    """Tmax/Tmin diarios a partir de (nt, ncell) con centinela -9999."""
+    a = np.array(arr, dtype=np.float32)
+    a[a <= -9000] = np.nan
+    with np.errstate(all="ignore"):
+        return np.nanmax(a, axis=0), np.nanmin(a, axis=0)
+
+
+def add_thermal_events(payloads, fc_payload, fc_base):
+    """Olas de calor / friajes (Russo et al. 2014) con intensidad continua.
+
+    Agrega la variable 'hw' a cada payload: grados por encima del p90 (calor,
+    positivo) o por debajo del p10 (friaje, negativo) durante rachas de >=3
+    dias consecutivos; 0 = sin evento. Umbrales climatologicos de ERA5.
+    """
+    path = os.path.join(ROOT, "thresholds.npz")
+    if not os.path.exists(path):
+        print("[hw] thresholds.npz no existe aun (corre el workflow de "
+              "umbrales); se omite la capa de eventos")
+        return
+    th = np.load(path)
+    p90 = th["p90"].reshape(366, -1)
+    p10 = th["p10"].reshape(366, -1)
+
+    entries = []  # (fecha, tmax, tmin, [(payload, indices_de_timestep)])
+    for ds_str, pl in sorted(payloads.items()):
+        d = dt.date.fromisoformat(ds_str)
+        tmax, tmin = _day_t2m_stats(pl["vars"]["t2m"])
+        entries.append((d, tmax, tmin, [(pl, list(range(len(pl["hours"]))))]))
+    if fc_payload is not None:
+        base = dt.date.fromisoformat(fc_base)
+        groups = {}
+        for i, h in enumerate(fc_payload["hours"]):
+            groups.setdefault(base + dt.timedelta(days=int(h) // 24), []).append(i)
+        for day, idxs in sorted(groups.items()):
+            sub = [fc_payload["vars"]["t2m"][i] for i in idxs]
+            tmax, tmin = _day_t2m_stats(sub)
+            entries.append((day, tmax, tmin, [(fc_payload, idxs)]))
+
+    TX = np.stack([e[1] for e in entries])
+    TN = np.stack([e[2] for e in entries])
+    P90 = np.stack([p90[_doy_index(e[0])] for e in entries])
+    P10 = np.stack([p10[_doy_index(e[0])] for e in entries])
+    with np.errstate(invalid="ignore"):
+        hot, cold = TX >= P90, TN <= P10
+    hotev = np.zeros_like(hot)
+    coldev = np.zeros_like(cold)
+    for i in range(len(entries) - 2):  # racha minima de 3 dias consecutivos
+        tri = hot[i] & hot[i + 1] & hot[i + 2]
+        hotev[i] |= tri; hotev[i + 1] |= tri; hotev[i + 2] |= tri
+        tri = cold[i] & cold[i + 1] & cold[i + 2]
+        coldev[i] |= tri; coldev[i + 1] |= tri; coldev[i + 2] |= tri
+    inten = (np.where(hotev, TX - P90, 0.0) +
+             np.where(coldev, TN - P10, 0.0))
+    inten = np.round(np.nan_to_num(inten, nan=0.0), 1)
+
+    for i, (day, _, _, sinks) in enumerate(entries):
+        row = inten[i].tolist()
+        for pl, idxs in sinks:
+            hw = pl["vars"].setdefault("hw", [None] * len(pl["hours"]))
+            for j in idxs:
+                hw[j] = row
+    for pl in list(payloads.values()) + ([fc_payload] if fc_payload else []):
+        if "hw" in pl["vars"]:  # sanea huecos por si algun timestep quedo sin dia
+            zeros = [0.0] * len(pl["vars"]["t2m"][0])
+            pl["vars"]["hw"] = [r if r is not None else zeros
+                                for r in pl["vars"]["hw"]]
+    n_ev = int(hotev.any(axis=0).sum() + coldev.any(axis=0).sum())
+    print(f"[hw] eventos detectados en {n_ev} celdas del dominio")
+
+
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     client = get_client()
     today = dt.datetime.now(dt.timezone.utc).date()
 
-    got = []
+    payloads = {}
     with tempfile.TemporaryDirectory() as workdir:
         for back in range(MAX_TRIES):
-            if len(got) >= KEEP_DAYS:
+            if len(payloads) >= KEEP_DAYS:
                 break
             d = today - dt.timedelta(days=back)
             ds = d.strftime("%Y-%m-%d")
-            out_path = os.path.join(DATA_DIR, f"{ds}.json")
             try:
                 print(f"[fetch] {ds} ...", flush=True)
                 sl, ml = retrieve_day(client, ds, workdir)
-                payload = to_json(sl, ml, ds)
-                with open(out_path, "w") as f:
-                    json.dump(payload, f, separators=(",", ":"))
-                print(f"[ok] {out_path} ({os.path.getsize(out_path)//1024} KB)")
-                got.append(ds)
+                payloads[ds] = to_json(sl, ml, ds)
             except Exception as e:
                 print(f"[warn] {ds} no disponible: {e}", file=sys.stderr)
+    got = sorted(payloads)
 
     if not got:
         print("[error] no se pudo descargar ningun dia", file=sys.stderr)
@@ -162,23 +236,38 @@ def main():
             print(f"[prune] {base}")
 
     # pronostico: +24h a +120h desde el run mas reciente disponible
-    fc_base = None
+    fc_base, fc_payload = None, None
     try:
         base = max(got)
         print(f"[fc] pronostico desde run {base} 00Z (+24h a +120h) ...", flush=True)
         with tempfile.TemporaryDirectory() as wd:
             sl, ml = retrieve_day(client, base, wd, leads=FC_LEADS)
-            payload = to_json(sl, ml, base)
-            payload["forecast"] = True
-            with open(os.path.join(DATA_DIR, "forecast.json"), "w") as f:
-                json.dump(payload, f, separators=(",", ":"))
+            fc_payload = to_json(sl, ml, base)
+            fc_payload["forecast"] = True
         fc_base = base
-        print(f"[ok] forecast.json (base {base})")
     except Exception as e:
         print(f"[warn] pronostico no disponible: {e}", file=sys.stderr)
-        fc_path = os.path.join(DATA_DIR, "forecast.json")
-        if os.path.exists(fc_path):
-            os.remove(fc_path)  # evitar pronostico viejo
+        fc_payload = None
+
+    # olas de calor y friajes sobre la serie completa (pasado + pronostico)
+    try:
+        add_thermal_events(payloads, fc_payload, fc_base)
+    except Exception as e:
+        print(f"[warn] capa de eventos termicos fallo: {e}", file=sys.stderr)
+
+    # escribir todos los archivos
+    for ds_str, pl in payloads.items():
+        out_path = os.path.join(DATA_DIR, f"{ds_str}.json")
+        with open(out_path, "w") as f:
+            json.dump(pl, f, separators=(",", ":"))
+        print(f"[ok] {out_path} ({os.path.getsize(out_path)//1024} KB)")
+    fc_path = os.path.join(DATA_DIR, "forecast.json")
+    if fc_payload is not None:
+        with open(fc_path, "w") as f:
+            json.dump(fc_payload, f, separators=(",", ":"))
+        print(f"[ok] forecast.json (base {fc_base})")
+    elif os.path.exists(fc_path):
+        os.remove(fc_path)  # evitar pronostico viejo
 
     manifest = {"dates": sorted(got), "forecast": fc_base,
                 "updated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
