@@ -20,15 +20,31 @@ jobs:
       - name: Instalar dependencias
         run: pip install cdsapi xarray netcdf4 numpy scipy
 
+      - name: Restaurar cache de descargas ERA5
+        uses: actions/cache/restore@v4
+        with:
+          path: era5_cache
+          key: era5-daily-v1
+          restore-keys: era5-daily-v1
+
       - name: Descargar ERA5 y calcular percentiles (2003-2022)
         env:
           ADS_API_KEY: ${{ secrets.ADS_API_KEY }}
         run: python scripts/compute_thresholds.py
 
+      - name: Guardar cache de descargas ERA5
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: era5_cache
+          key: era5-daily-v1-${{ github.run_id }}
+
       - name: Guardar thresholds.npz en el repositorio
+        if: success()
         run: |
           git config user.name "thresholds-bot"
           git config user.email "actions@github.com"
+          git pull --rebase
           git add thresholds.npz
           git commit -m "Umbrales ERA5 p90/p10 (Russo et al. 2014)"
           git push
