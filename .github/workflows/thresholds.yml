@@ -1,0 +1,34 @@
+name: Calcular umbrales ERA5 (una sola vez)
+
+on:
+  workflow_dispatch: {}   # se lanza manualmente; tarda 1-3 horas
+
+permissions:
+  contents: write
+
+jobs:
+  thresholds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install cdsapi xarray netcdf4 numpy scipy
+
+      - name: Descargar ERA5 y calcular percentiles (2003-2022)
+        env:
+          ADS_API_KEY: ${{ secrets.ADS_API_KEY }}
+        run: python scripts/compute_thresholds.py
+
+      - name: Guardar thresholds.npz en el repositorio
+        run: |
+          git config user.name "thresholds-bot"
+          git config user.email "actions@github.com"
+          git add thresholds.npz
+          git commit -m "Umbrales ERA5 p90/p10 (Russo et al. 2014)"
+          git push
