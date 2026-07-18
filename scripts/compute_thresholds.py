@@ -37,27 +37,51 @@ def get_client():
                          key=key, quiet=True)
 
 
-def fetch_stat(client, stat, workdir):
-    """Descarga la serie diaria 2003-2022 de una estadistica (max o min)."""
+CHUNKS = [YEARS[i:i + 5] for i in range(0, len(YEARS), 5)]  # 4 bloques de 5 anios
+
+
+def _chunk_path(workdir, stat, years):
+    return os.path.join(workdir, f"{stat}_{years[0]}_{years[-1]}.nc")
+
+
+def request_chunk(stat, years, workdir):
+    """Una peticion de 5 anios (cada hilo con su propio cliente)."""
+    f = _chunk_path(workdir, stat, years)
+    if os.path.exists(f):
+        return f
+    print(f"[era5] {stat} {years[0]}-{years[-1]} en cola...", flush=True)
+    get_client().retrieve(
+        "derived-era5-single-levels-daily-statistics",
+        {
+            "product_type": "reanalysis",
+            "variable": ["2m_temperature"],
+            "year": [str(y) for y in years],
+            "month": [f"{m:02d}" for m in range(1, 13)],
+            "day": [f"{d:02d}" for d in range(1, 32)],
+            "daily_statistic": f"daily_{stat}",
+            "time_zone": "utc-05:00",
+            "frequency": "1-hourly",
+            "area": AREA,
+        }, f)
+    print(f"[era5] {stat} {years[0]}-{years[-1]} descargado", flush=True)
+    return f
+
+
+def fetch_all(workdir):
+    """Envia las 8 peticiones EN PARALELO: la cola del CDS las procesa a la vez."""
+    from concurrent.futures import ThreadPoolExecutor
+    jobs = [(s, ch) for s in ("maximum", "minimum") for ch in CHUNKS]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+        futs = [ex.submit(request_chunk, s, ch, workdir) for s, ch in jobs]
+        for fut in futs:
+            fut.result()  # propaga cualquier error
+
+
+def load_stat(stat, workdir):
+    """Concatena los bloques descargados de una estadistica."""
     arrays, dates = [], []
-    for y in YEARS:
-        f = os.path.join(workdir, f"{stat}_{y}.nc")
-        if not os.path.exists(f):
-            print(f"[era5] {stat} {y} ...", flush=True)
-            client.retrieve(
-                "derived-era5-single-levels-daily-statistics",
-                {
-                    "product_type": "reanalysis",
-                    "variable": ["2m_temperature"],
-                    "year": str(y),
-                    "month": [f"{m:02d}" for m in range(1, 13)],
-                    "day": [f"{d:02d}" for d in range(1, 32)],
-                    "daily_statistic": f"daily_{stat}",
-                    "time_zone": "utc-05:00",
-                    "frequency": "1-hourly",
-                    "area": AREA,
-                }, f)
-        ds = xr.open_dataset(f)
+    for ch in CHUNKS:
+        ds = xr.open_dataset(_chunk_path(workdir, stat, ch))
         var = [v for v in ds.data_vars if ds[v].ndim >= 3][0]
         tdim = [d for d in ds[var].dims if "time" in d][0]
         arrays.append(ds[var].values.astype(np.float32))
@@ -97,14 +121,14 @@ def to_cams_grid(field366, lats, lons):
 
 
 def main():
-    client = get_client()
     with tempfile.TemporaryDirectory() as wd:
+        fetch_all(wd)  # 8 peticiones en paralelo (4 bloques x 2 estadisticas)
         print("== Tmax diaria (umbral p90, olas de calor) ==")
-        tmax, dates, lats, lons = fetch_stat(client, "maximum", wd)
+        tmax, dates, lats, lons = load_stat("maximum", wd)
         p90 = to_cams_grid(percentile_climatology(tmax, dates, 90), lats, lons)
         del tmax
         print("== Tmin diaria (umbral p10, friajes) ==")
-        tmin, dates, lats, lons = fetch_stat(client, "minimum", wd)
+        tmin, dates, lats, lons = load_stat("minimum", wd)
         p10 = to_cams_grid(percentile_climatology(tmin, dates, 10), lats, lons)
         del tmin
     np.savez_compressed(OUT, p90=p90, p10=p10,
