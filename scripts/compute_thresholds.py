@@ -37,7 +37,8 @@ def get_client():
                          key=key, quiet=True)
 
 
-CHUNKS = [YEARS[i:i + 5] for i in range(0, len(YEARS), 5)]  # 4 bloques de 5 anios
+CHUNKS = [YEARS[i:i + 2] for i in range(0, len(YEARS), 2)]  # 10 bloques de 2 anios
+# (bloques de 5 anios exceden el limite de costo del CDS para este dataset)
 
 
 def _chunk_path(workdir, stat, years):
