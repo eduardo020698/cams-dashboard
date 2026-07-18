@@ -98,7 +98,10 @@ const POLL = {
   no2: {name:"NO₂",   unit:"µg/m³", bp:[0,10,25,50,100,200]},
   so2: {name:"SO₂",   unit:"µg/m³", bp:[0,5,20,50,125,350]},
   t2m: {name:"T 2m",  unit:"°C",    bp:[-10,0,8,16,24,32],
-        colors:["#3b82f6","#22d3ee","#22c55e","#eab308","#f97316","#dc2626"]}
+        colors:["#3b82f6","#22d3ee","#22c55e","#eab308","#f97316","#dc2626"]},
+  hw:  {name:"Olas T°", unit:"°C vs umbral", bp:[0,2,5,9], diverging:true,
+        hot:["#fbbf24","#f97316","#dc2626","#7f1d1d"],
+        cold:["#93c5fd","#3b82f6","#1d4ed8","#172554"]}
 };
 const COLORS = ["#22c55e","#eab308","#f97316","#ef4444","#a855f7","#7f1d1d"];
 const TZ = "America/Lima";
@@ -131,6 +134,19 @@ function rgba(v, key){
   const bp = POLL[key].bp;
   const cols = POLL[key].colors || COLORS;
   if (v == null || v <= -9000 || isNaN(v)) return [0,0,0,0];
+  if (POLL[key].diverging){
+    // escala continua de intensidad: rojo = ola de calor, azul = friaje
+    const av = Math.abs(v);
+    if (av < 0.05) return [148,163,184,26];        // sin evento: casi invisible
+    const ramp = v > 0 ? POLL[key].hot : POLL[key].cold;
+    const bps = POLL[key].bp;                       // [0,2,5,9]
+    let k = 0;
+    while (k < bps.length-2 && av >= bps[k+1]) k++;
+    const f = Math.min(1, (av - bps[k]) / (bps[k+1] - bps[k] || 1));
+    const c1 = hex2rgb(ramp[k]), c2 = hex2rgb(ramp[Math.min(k+1, ramp.length-1)]);
+    return [Math.round(c1[0]+(c2[0]-c1[0])*f), Math.round(c1[1]+(c2[1]-c1[1])*f),
+            Math.round(c1[2]+(c2[2]-c1[2])*f), 195];
+  }
   let k = 0;
   while (k < bp.length-1 && v >= bp[k+1]) k++;
   const lo = bp[k], hi = (k < bp.length-1) ? bp[k+1] : Math.abs(bp[k])*1.5+1;
@@ -267,6 +283,14 @@ function buildChips(){
 function buildLegend(){
   const lg = document.getElementById("legend");
   const bp = POLL[cur].bp;
+  if (POLL[cur].diverging){
+    const cold = POLL[cur].cold, hot = POLL[cur].hot;
+    lg.innerHTML = `<span style="margin-right:4px">friaje ← ${POLL[cur].unit} → ola de calor</span>` +
+      cold.slice().reverse().map((c,k)=>`<div class="lg" style="background:${c}">${-bp[bp.length-1-k]||""}</div>`).join("") +
+      `<div class="lg" style="background:#334155">0</div>` +
+      hot.map((c,k)=>`<div class="lg" style="background:${c}">${bp[k+1]||"+"}</div>`).join("");
+    return;
+  }
   const cols = POLL[cur].colors || COLORS;
   lg.innerHTML = `<span style="margin-right:4px">${POLL[cur].name} ${POLL[cur].unit}</span>` +
     bp.slice(0,-1).map((v,k)=>`<div class="lg" style="background:${cols[k]}">${v}</div>`).join("") +
